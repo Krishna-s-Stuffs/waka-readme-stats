@@ -1,9 +1,10 @@
-from asyncio import Task
+import asyncio
 from hashlib import md5
 from json import dumps
 from string import Template
 from typing import Awaitable, Dict, Callable, Optional, List, Tuple
 
+import httpx
 from httpx import AsyncClient
 from yaml import safe_load
 
@@ -141,7 +142,7 @@ class DownloadManager:
     It also executes dynamic queries upon request and caches result.
     """
 
-    _client = AsyncClient(timeout=60.0)
+    _client = AsyncClient(timeout=120.0)
     _REMOTE_RESOURCES_CACHE = dict()
 
     @staticmethod
@@ -216,26 +217,38 @@ class DownloadManager:
         """
         return await DownloadManager._get_remote_resource(resource, safe_load)
 
-    @staticmethod
+@staticmethod
     async def _fetch_graphql_query(query: str, retries_count: int = 10, **kwargs) -> Dict:
         """
         Execute GitHub GraphQL API simple query.
-        :param query: Dynamic query identifier.
-        :param use_github_action: Use GitHub actions bot auth token instead of current user.
-        :param kwargs: Parameters for substitution of variables in dynamic query.
-        :return: Response JSON dictionary.
         """
         headers = {"Authorization": f"Bearer {EM.GH_TOKEN}"}
-        res = await DownloadManager._client.post(
-            "https://api.github.com/graphql", json={"query": Template(GITHUB_API_QUERIES[query]).substitute(kwargs)}, headers=headers
-        )
+        
+        try:
+            # Attempt the request
+            res = await DownloadManager._client.post(
+                "https://api.github.com/graphql", 
+                json={"query": Template(GITHUB_API_QUERIES[query]).substitute(kwargs)}, 
+                headers=headers
+            )
+        except (httpx.RemoteProtocolError, httpx.ReadTimeout, httpx.ConnectError, httpx.ConnectTimeout) as e:
+            # CATCH THE ERROR HERE
+            if retries_count > 0:
+                print(f"Network error ({e}) encountered. Retrying in 5 seconds... ({retries_count} attempts left)")
+                await asyncio.sleep(5)
+                return await DownloadManager._fetch_graphql_query(query, retries_count - 1, **kwargs)
+            else:
+                raise e
+
         if res.status_code == 200:
             return res.json()
         elif res.status_code == 502 and retries_count > 0:
+            print(f"Received 502 Bad Gateway. Retrying... ({retries_count} attempts left)")
+            await asyncio.sleep(2)
             return await DownloadManager._fetch_graphql_query(query, retries_count - 1, **kwargs)
         else:
             raise Exception(f"Query '{query}' failed to run by returning code of {res.status_code}: {res.json()}")
-
+            
     @staticmethod
     def _find_pagination_and_data_list(response: Dict) -> Tuple[List, Dict]:
         """
