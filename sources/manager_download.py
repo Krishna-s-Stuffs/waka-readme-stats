@@ -217,7 +217,7 @@ class DownloadManager:
         """
         return await DownloadManager._get_remote_resource(resource, safe_load)
 
-@staticmethod
+    @staticmethod
     async def _fetch_graphql_query(query: str, retries_count: int = 10, **kwargs) -> Dict:
         """
         Execute GitHub GraphQL API simple query.
